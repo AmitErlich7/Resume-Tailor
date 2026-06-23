@@ -12,13 +12,4 @@ class Project(BaseModel):
     scale: str  # "personal" | "team" | "production"
     key_features: List[str] = []
     source: str  # "manual" | "github"
-
-
-class GitHubProjectRaw(BaseModel):
-    """Shape returned by Claude after analyzing a GitHub repo."""
-    name: Optional[str] = None
-    purpose: Optional[str] = None
-    tech_stack: Optional[List[str]] = None
-    your_role: Optional[str] = None
-    scale: Optional[str] = None
-    key_features: Optional[List[str]] = None
+    readme_text: Optional[str] = None

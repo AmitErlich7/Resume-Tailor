@@ -1,12 +1,15 @@
 import Nav from '../components/Nav.jsx'
-
-const INFO_ROWS = [
-  { label: 'Mode',     value: 'Local (single user)' },
-  { label: 'Database', value: 'SQLite (resume_tailor.db)' },
-  { label: 'Auth',     value: 'None' },
-]
+import { useAuth } from '../hooks/useAuth.js'
 
 export default function Account() {
+  const { user, signOut } = useAuth()
+
+  const infoRows = [
+    { label: 'Email', value: user?.email || '—' },
+    { label: 'Auth', value: 'Google (via Supabase)' },
+    { label: 'Database', value: 'Supabase PostgreSQL' },
+  ]
+
   return (
     <div className="app-shell">
       <Nav />
@@ -15,18 +18,22 @@ export default function Account() {
 
           <header style={s.header}>
             <h1 style={s.h1}>Account</h1>
-            <p style={s.sub}>Running in local mode — no authentication required.</p>
+            <p style={s.sub}>Signed in as {user?.email || 'unknown'}</p>
           </header>
 
           <div style={s.card}>
-            <div style={s.cardTitle}>System info</div>
-            {INFO_ROWS.map(({ label, value }) => (
+            <div style={s.cardTitle}>Account info</div>
+            {infoRows.map(({ label, value }) => (
               <div key={label} style={s.row}>
                 <span style={s.rowLabel}>{label}</span>
                 <span style={s.rowValue}>{value}</span>
               </div>
             ))}
           </div>
+
+          <button style={s.signOutBtn} onClick={signOut}>
+            Sign out
+          </button>
 
         </div>
       </main>
@@ -50,6 +57,7 @@ const s = {
     border: '1px solid var(--color-border)',
     borderRadius: 'var(--radius-lg)',
     padding: 'var(--space-5)',
+    marginBottom: 'var(--space-6)',
   },
   cardTitle: {
     fontSize: '12px',
@@ -69,4 +77,15 @@ const s = {
   },
   rowLabel: { fontWeight: 500, color: 'var(--color-text-2)' },
   rowValue: { color: 'var(--color-text-3)' },
+  signOutBtn: {
+    background: 'none',
+    border: '1px solid var(--color-error)',
+    borderRadius: 'var(--radius-md)',
+    padding: '9px var(--space-5)',
+    fontSize: '13.5px',
+    fontWeight: 600,
+    color: 'var(--color-error)',
+    cursor: 'pointer',
+    fontFamily: 'var(--font-ui)',
+  },
 }

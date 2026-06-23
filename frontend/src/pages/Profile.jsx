@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import Nav from '../components/Nav.jsx'
 import GitHubProfileImport from '../components/GitHubProfileImport.jsx'
+import CVUpload from '../components/CVUpload.jsx'
 import {
   ContactSection,
   SummarySection,
@@ -18,6 +19,7 @@ const EMPTY_CONTACT = { name: '', email: '', phone: '', linkedin: '', github: ''
 export default function Profile() {
   const { profile, loading, error: profileError, reload } = useProfile()
   const [showGitHub, setShowGitHub] = useState(false)
+  const [showCVUpload, setShowCVUpload] = useState(false)
 
   const [contact, setContact] = useState(EMPTY_CONTACT)
   const [summary, setSummary] = useState('')
@@ -57,6 +59,33 @@ export default function Profile() {
     reload()
   }
 
+  const handleCVApply = async (extracted) => {
+    if (extracted.contact) setContact(prev => {
+      const merged = { ...prev }
+      for (const [k, v] of Object.entries(extracted.contact)) {
+        if (v) merged[k] = v
+      }
+      return merged
+    })
+    if (extracted.summary) setSummary(extracted.summary)
+    if (extracted.skills?.length) setSkills(prev => {
+      const existing = new Set(prev)
+      const merged = [...prev]
+      for (const s of extracted.skills) {
+        if (!existing.has(s)) merged.push(s)
+      }
+      return merged
+    })
+    if (extracted.experiences?.length) setExperiences(prev => [
+      ...prev,
+      ...extracted.experiences.map(e => ({ ...e, id: crypto.randomUUID() })),
+    ])
+    if (extracted.education?.length) setEducation(prev => [
+      ...prev,
+      ...extracted.education.map(e => ({ ...e, id: crypto.randomUUID() })),
+    ])
+  }
+
   return (
     <div className="app-shell">
       <Nav />
@@ -64,7 +93,12 @@ export default function Profile() {
         <div style={{ maxWidth: '760px', margin: '0 auto' }}>
 
           <header style={p.header}>
-            <h1 style={p.h1}>Profile</h1>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h1 style={p.h1}>Profile</h1>
+              <button style={p.uploadBtn} onClick={() => setShowCVUpload(true)}>
+                Upload CV (PDF)
+              </button>
+            </div>
             <p style={p.sub}>Keep this accurate. The AI tailors only what you provide here.</p>
           </header>
 
@@ -94,6 +128,13 @@ export default function Profile() {
               onImported={handleGitHubImported}
             />
           )}
+
+          {showCVUpload && (
+            <CVUpload
+              onClose={() => setShowCVUpload(false)}
+              onApply={handleCVApply}
+            />
+          )}
         </div>
       </main>
     </div>
@@ -110,7 +151,18 @@ const p = {
     letterSpacing: '-0.02em',
     marginBottom: 'var(--space-1)',
   },
-  sub: { fontSize: '14px', color: 'var(--color-text-3)' },
+  sub: { fontSize: '14px', color: 'var(--color-text-3)', marginTop: 'var(--space-1)' },
+  uploadBtn: {
+    background: 'none',
+    border: '1px dashed var(--color-accent)',
+    borderRadius: 'var(--radius-md)',
+    padding: '7px var(--space-4)',
+    fontSize: '13px',
+    color: 'var(--color-accent)',
+    fontWeight: 600,
+    cursor: 'pointer',
+    fontFamily: 'var(--font-ui)',
+  },
   loadingWrap: { display: 'flex', justifyContent: 'center', padding: 'var(--space-12) 0' },
   spinner: {
     width: '32px',

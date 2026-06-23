@@ -31,14 +31,14 @@ export default function GitHubProfileImport({ onClose, onImported }) {
   const [savedCount, setSavedCount] = useState(0)
 
   const selectedRepos = repos.filter(r => selected.has(r.url))
-  const validCards = cards.filter(c => !c.skipped && c.project_card && !c.error && !c.loading)
-  const isAnalyzing = step === 'analyzing'
+  const validCards = cards.filter(c => !c.skipped && !c.error && !c.loading)
+  const isFetching = step === 'fetching-repos'
   const isSaving = step === 'saving'
 
   const handleFetch = async () => {
     if (!username.trim()) return
     setError(null)
-    setStep('fetching')
+    setStep('fetching-repos')
     try {
       const result = await fetchGitHubProfile(username.trim())
       setRepos(result.repos)
@@ -59,21 +59,30 @@ export default function GitHubProfileImport({ onClose, onImported }) {
     })
   }
 
-  const handleAnalyze = async () => {
+  const handleImport = async () => {
     if (selectedRepos.length === 0) return
     const initialCards = selectedRepos.map(r => ({
       repo_url: r.url, repo_name: r.name,
-      loading: true, project_card: null, error: null, skipped: false,
+      loading: true, data: null, error: null, skipped: false,
+      name: r.name, purpose: '', your_role: 'solo_builder', scale: 'personal',
+      tech_stack: [], key_features: [], readme_text: '',
     }))
     setCards(initialCards)
-    setStep('analyzing')
+    setStep('fetching-data')
 
     const promises = selectedRepos.map(async repo => {
       try {
         const result = await importGitHubRepo(repo.url)
         setCards(prev => prev.map(c =>
           c.repo_url === repo.url
-            ? { ...c, project_card: { ...result.project_card, repo_url: result.repo_url }, loading: false }
+            ? {
+                ...c,
+                loading: false,
+                name: result.name || repo.name,
+                tech_stack: result.tech_stack || [],
+                readme_text: result.readme_text || '',
+                purpose: result.description || '',
+              }
             : c
         ))
       } catch (err) {
@@ -88,7 +97,7 @@ export default function GitHubProfileImport({ onClose, onImported }) {
 
   const updateCard = (repoUrl, key, value) =>
     setCards(prev => prev.map(c =>
-      c.repo_url === repoUrl ? { ...c, project_card: { ...c.project_card, [key]: value } } : c
+      c.repo_url === repoUrl ? { ...c, [key]: value } : c
     ))
 
   const skipCard = repoUrl =>
@@ -99,11 +108,21 @@ export default function GitHubProfileImport({ onClose, onImported }) {
 
   const handleSave = async () => {
     setStep('saving')
-    const toSave = cards.filter(c => !c.skipped && c.project_card && !c.error && !c.loading)
+    const toSave = cards.filter(c => !c.skipped && !c.error && !c.loading)
     const saved = []
     for (const card of toSave) {
       try {
-        const result = await confirmGitHubProject(card.project_card)
+        const projectCard = {
+          name: card.name,
+          repo_url: card.repo_url,
+          tech_stack: card.tech_stack,
+          purpose: card.purpose,
+          your_role: card.your_role,
+          scale: card.scale,
+          key_features: card.key_features,
+          readme_text: card.readme_text,
+        }
+        const result = await confirmGitHubProject(projectCard)
         saved.push(result.project)
       } catch { /* skip individual failures */ }
     }
@@ -119,7 +138,7 @@ export default function GitHubProfileImport({ onClose, onImported }) {
     <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={s.modal}>
         <div style={s.head}>
-          <h2 style={s.title}>Import from GitHub Profile</h2>
+          <h2 style={s.title}>Import from GitHub</h2>
           <button style={s.closeBtn} onClick={onClose} aria-label="Close">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -127,11 +146,11 @@ export default function GitHubProfileImport({ onClose, onImported }) {
           </button>
         </div>
 
-        {/* ── Step: input ── */}
-        {(step === 'input' || step === 'fetching') && (
+        {/* Step: input */}
+        {(step === 'input' || step === 'fetching-repos') && (
           <div>
             <p style={s.hint}>
-              Enter your GitHub username or profile URL. We'll list your public repos so you can choose which ones to analyze with AI.
+              Enter your GitHub username or profile URL. We'll fetch your public repos so you can pick which to add as projects.
             </p>
             <div style={s.field}>
               <label style={s.label}>GitHub username or profile URL</label>
@@ -141,7 +160,7 @@ export default function GitHubProfileImport({ onClose, onImported }) {
                 onKeyDown={e => e.key === 'Enter' && handleFetch()}
                 placeholder="johndoe  or  https://github.com/johndoe"
                 style={s.input}
-                disabled={step === 'fetching'}
+                disabled={isFetching}
                 autoFocus
               />
             </div>
@@ -149,11 +168,11 @@ export default function GitHubProfileImport({ onClose, onImported }) {
             <div style={s.btnRow}>
               <button style={s.cancelBtn} onClick={onClose}>Cancel</button>
               <button
-                style={{ ...s.primaryBtn, opacity: step === 'fetching' || !username.trim() ? 0.5 : 1 }}
+                style={{ ...s.primaryBtn, opacity: isFetching || !username.trim() ? 0.5 : 1 }}
                 onClick={handleFetch}
-                disabled={step === 'fetching' || !username.trim()}
+                disabled={isFetching || !username.trim()}
               >
-                {step === 'fetching'
+                {isFetching
                   ? <><SpinnerSm />Fetching repos…</>
                   : 'Fetch repos →'}
               </button>
@@ -161,7 +180,7 @@ export default function GitHubProfileImport({ onClose, onImported }) {
           </div>
         )}
 
-        {/* ── Step: select ── */}
+        {/* Step: select */}
         {step === 'select' && (
           <div>
             <div style={s.selectMeta}>
@@ -225,29 +244,29 @@ export default function GitHubProfileImport({ onClose, onImported }) {
             </div>
 
             {selected.size > 10 && (
-              <p style={s.warning}>Maximum 10 repos per analysis run.</p>
+              <p style={s.warning}>Maximum 10 repos per import.</p>
             )}
 
             <div style={s.btnRow}>
               <button style={s.cancelBtn} onClick={() => setStep('input')}>← Back</button>
               <button
                 style={{ ...s.primaryBtn, opacity: selected.size === 0 || selected.size > 10 ? 0.4 : 1 }}
-                onClick={handleAnalyze}
+                onClick={handleImport}
                 disabled={selected.size === 0 || selected.size > 10}
               >
-                Analyze {selected.size > 0 ? `${selected.size} ` : ''}selected →
+                Import {selected.size > 0 ? `${selected.size} ` : ''}selected →
               </button>
             </div>
           </div>
         )}
 
-        {/* ── Step: analyzing / review / saving ── */}
-        {(step === 'analyzing' || step === 'review' || step === 'saving') && (
+        {/* Step: fetching-data / review / saving */}
+        {(step === 'fetching-data' || step === 'review' || step === 'saving') && (
           <div>
             <p style={s.hint}>
-              {isAnalyzing && pendingCount > 0
-                ? `Analyzing ${pendingCount} remaining repo${pendingCount !== 1 ? 's' : ''}…`
-                : 'Review the AI-extracted details. Edit anything before saving.'}
+              {step === 'fetching-data' && pendingCount > 0
+                ? `Fetching data for ${pendingCount} repo${pendingCount !== 1 ? 's' : ''}…`
+                : 'Review the details below. Tech stack was extracted from the repo. Fill in the rest before saving.'}
             </p>
             <div style={s.cardList}>
               {cards.map(card => (
@@ -266,9 +285,9 @@ export default function GitHubProfileImport({ onClose, onImported }) {
                 ← Back
               </button>
               <button
-                style={{ ...s.primaryBtn, opacity: isAnalyzing || isSaving || validCards.length === 0 ? 0.4 : 1 }}
+                style={{ ...s.primaryBtn, opacity: step === 'fetching-data' || isSaving || validCards.length === 0 ? 0.4 : 1 }}
                 onClick={handleSave}
-                disabled={isAnalyzing || isSaving || validCards.length === 0}
+                disabled={step === 'fetching-data' || isSaving || validCards.length === 0}
               >
                 {isSaving
                   ? <><SpinnerSm />Saving…</>
@@ -278,7 +297,7 @@ export default function GitHubProfileImport({ onClose, onImported }) {
           </div>
         )}
 
-        {/* ── Step: done ── */}
+        {/* Step: done */}
         {step === 'done' && (
           <div style={s.done}>
             <div style={s.doneIcon}>
@@ -298,13 +317,14 @@ export default function GitHubProfileImport({ onClose, onImported }) {
 /* ── Card item ─────────────────────────────────────────────────────────────── */
 function CardItem({ card, disabled, onUpdate, onSkip, onUnskip }) {
   const [open, setOpen] = useState(true)
+  const [showReadme, setShowReadme] = useState(false)
 
   if (card.loading) {
     return (
       <div style={ci.card}>
         <div style={ci.head}>
           <span style={ci.repoName}>{card.repo_name}</span>
-          <span style={ci.analyzing}><SpinnerSm color="var(--color-text-3)" />Analyzing…</span>
+          <span style={ci.analyzing}><SpinnerSm color="var(--color-text-3)" />Fetching…</span>
         </div>
       </div>
     )
@@ -333,16 +353,13 @@ function CardItem({ card, disabled, onUpdate, onSkip, onUnskip }) {
     )
   }
 
-  const pc = card.project_card
-  if (!pc) return null
-
   return (
     <div style={ci.card}>
       <div style={{ ...ci.head, cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
         <div style={ci.headLeft}>
           <span style={ci.chevron}>{open ? '▾' : '▸'}</span>
           <span style={ci.repoName}>{card.repo_name}</span>
-          <span style={ci.successDot} title="Analyzed" />
+          <span style={ci.successDot} title="Fetched" />
         </div>
         <button
           style={ci.skipBtn}
@@ -357,16 +374,16 @@ function CardItem({ card, disabled, onUpdate, onSkip, onUnskip }) {
         <div style={ci.fields}>
           <div style={ci.field}>
             <label style={ci.label}>Project name</label>
-            <input value={pc.name || ''} onChange={e => onUpdate('name', e.target.value)} style={ci.input} disabled={disabled} />
+            <input value={card.name || ''} onChange={e => onUpdate('name', e.target.value)} style={ci.input} disabled={disabled} />
           </div>
           <div style={ci.field}>
-            <label style={ci.label}>Purpose</label>
-            <textarea value={pc.purpose || ''} onChange={e => onUpdate('purpose', e.target.value)} style={{ ...ci.input, resize: 'vertical' }} rows={2} disabled={disabled} />
+            <label style={ci.label}>Purpose / Description</label>
+            <textarea value={card.purpose || ''} onChange={e => onUpdate('purpose', e.target.value)} style={{ ...ci.input, resize: 'vertical' }} rows={2} disabled={disabled} />
           </div>
           <div style={ci.field}>
             <label style={ci.label}>Tech stack (comma-separated)</label>
             <input
-              value={(pc.tech_stack || []).join(', ')}
+              value={(card.tech_stack || []).join(', ')}
               onChange={e => onUpdate('tech_stack', e.target.value.split(',').map(x => x.trim()).filter(Boolean))}
               style={ci.input}
               disabled={disabled}
@@ -375,7 +392,7 @@ function CardItem({ card, disabled, onUpdate, onSkip, onUnskip }) {
           <div style={ci.row2}>
             <div style={ci.field}>
               <label style={ci.label}>Role</label>
-              <select value={pc.your_role || 'solo_builder'} onChange={e => onUpdate('your_role', e.target.value)} style={ci.select} disabled={disabled}>
+              <select value={card.your_role || 'solo_builder'} onChange={e => onUpdate('your_role', e.target.value)} style={ci.select} disabled={disabled}>
                 <option value="solo_builder">Solo Builder</option>
                 <option value="contributor">Contributor</option>
                 <option value="maintainer">Maintainer</option>
@@ -384,7 +401,7 @@ function CardItem({ card, disabled, onUpdate, onSkip, onUnskip }) {
             </div>
             <div style={ci.field}>
               <label style={ci.label}>Scale</label>
-              <select value={pc.scale || 'personal'} onChange={e => onUpdate('scale', e.target.value)} style={ci.select} disabled={disabled}>
+              <select value={card.scale || 'personal'} onChange={e => onUpdate('scale', e.target.value)} style={ci.select} disabled={disabled}>
                 <option value="personal">Personal</option>
                 <option value="team">Team</option>
                 <option value="production">Production</option>
@@ -394,13 +411,27 @@ function CardItem({ card, disabled, onUpdate, onSkip, onUnskip }) {
           <div style={ci.field}>
             <label style={ci.label}>Key features (one per line)</label>
             <textarea
-              value={(pc.key_features || []).join('\n')}
+              value={(card.key_features || []).join('\n')}
               onChange={e => onUpdate('key_features', e.target.value.split('\n').filter(Boolean))}
               style={{ ...ci.input, resize: 'vertical' }}
               rows={3}
               disabled={disabled}
             />
           </div>
+
+          {card.readme_text && (
+            <div style={ci.readmeSection}>
+              <button
+                style={ci.readmeToggle}
+                onClick={() => setShowReadme(o => !o)}
+              >
+                {showReadme ? '▾ Hide' : '▸ Show'} README (reference)
+              </button>
+              {showReadme && (
+                <pre style={ci.readmeBox}>{card.readme_text}</pre>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -487,7 +518,6 @@ const s = {
     cursor: 'pointer', fontFamily: 'var(--font-ui)',
     display: 'flex', alignItems: 'center', gap: '4px',
   },
-  // Select step
   selectMeta: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     marginBottom: 'var(--space-3)',
@@ -544,13 +574,11 @@ const s = {
   },
   langDot: { width: '9px', height: '9px', borderRadius: '50%', flexShrink: 0 },
   repoStat: { fontSize: '11px', color: 'var(--color-text-3)', display: 'flex', alignItems: 'center' },
-  // Cards
   cardList: {
     display: 'flex', flexDirection: 'column', gap: 'var(--space-3)',
     maxHeight: '420px', overflowY: 'auto', marginBottom: 'var(--space-4)',
     paddingRight: '2px',
   },
-  // Done
   done: { textAlign: 'center', padding: 'var(--space-12) 0' },
   doneIcon: {
     width: '52px', height: '52px', borderRadius: '50%',
@@ -616,4 +644,25 @@ const ci = {
     fontFamily: 'var(--font-ui)', width: '100%',
   },
   row2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' },
+  readmeSection: { marginTop: 'var(--space-3)' },
+  readmeToggle: {
+    background: 'none', border: 'none', cursor: 'pointer',
+    fontSize: '12px', color: 'var(--color-text-3)', fontFamily: 'var(--font-ui)',
+    padding: '4px 0', fontWeight: 500,
+  },
+  readmeBox: {
+    marginTop: 'var(--space-2)',
+    padding: 'var(--space-3)',
+    background: 'var(--color-bg)',
+    border: '1px solid var(--color-border)',
+    borderRadius: 'var(--radius-md)',
+    fontSize: '12px',
+    lineHeight: '1.5',
+    color: 'var(--color-text-2)',
+    maxHeight: '200px',
+    overflowY: 'auto',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    fontFamily: 'var(--font-ui)',
+  },
 }

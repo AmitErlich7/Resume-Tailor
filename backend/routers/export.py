@@ -7,11 +7,10 @@ POST /export/{id}/pdf   — generate and return a PDF
 
 import logging
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 
 from services.db_service import (
-    LOCAL_USER_ID,
     get_profile,
     get_tailored_resume,
     update_tailored_resume_status,
@@ -22,8 +21,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def _load_approved_resume(resume_id: str) -> dict:
-    resume = await get_tailored_resume(resume_id, LOCAL_USER_ID)
+async def _load_approved_resume(resume_id: str, user_id: str) -> dict:
+    resume = await get_tailored_resume(resume_id, user_id)
     if not resume:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resume not found")
 
@@ -36,7 +35,7 @@ async def _load_approved_resume(resume_id: str) -> dict:
             ),
         )
 
-    profile = await get_profile(LOCAL_USER_ID)
+    profile = await get_profile(user_id)
     if profile:
         resume["contact"] = profile.get("contact", {})
         resume["education"] = profile.get("education", [])
@@ -45,8 +44,9 @@ async def _load_approved_resume(resume_id: str) -> dict:
 
 
 @router.post("/{resume_id}/docx")
-async def export_docx(resume_id: str):
-    resume = await _load_approved_resume(resume_id)
+async def export_docx(resume_id: str, request: Request):
+    user_id = request.state.user_id
+    resume = await _load_approved_resume(resume_id, user_id)
 
     try:
         file_bytes = generate_docx(resume)
@@ -61,7 +61,7 @@ async def export_docx(resume_id: str):
     role = resume.get("job_title", "role").replace(" ", "_").lower()
     filename = f"{role}_{company}_resume.docx"
 
-    await update_tailored_resume_status(resume_id, LOCAL_USER_ID, "exported")
+    await update_tailored_resume_status(resume_id, user_id, "exported")
 
     return Response(
         content=file_bytes,
@@ -71,8 +71,9 @@ async def export_docx(resume_id: str):
 
 
 @router.post("/{resume_id}/pdf")
-async def export_pdf(resume_id: str):
-    resume = await _load_approved_resume(resume_id)
+async def export_pdf(resume_id: str, request: Request):
+    user_id = request.state.user_id
+    resume = await _load_approved_resume(resume_id, user_id)
 
     try:
         file_bytes = generate_pdf(resume)
@@ -87,7 +88,7 @@ async def export_pdf(resume_id: str):
     role = resume.get("job_title", "role").replace(" ", "_").lower()
     filename = f"{role}_{company}_resume.pdf"
 
-    await update_tailored_resume_status(resume_id, LOCAL_USER_ID, "exported")
+    await update_tailored_resume_status(resume_id, user_id, "exported")
 
     return Response(
         content=file_bytes,

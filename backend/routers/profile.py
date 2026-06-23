@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any
 
 import bleach
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 
 from models.profile import (
     ContactPatch,
@@ -25,7 +25,6 @@ from models.profile import (
     VolunteeringPatch,
 )
 from services.db_service import (
-    LOCAL_USER_ID,
     get_profile,
     patch_profile_section,
     upsert_profile,
@@ -52,15 +51,15 @@ def _sanitize_dict(data: Any) -> Any:
 
 
 @router.get("")
-async def get_user_profile():
-    profile = await get_profile(LOCAL_USER_ID)
+async def get_user_profile(request: Request):
+    profile = await get_profile(request.state.user_id)
     if not profile:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
     return profile
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def create_or_replace_profile(body: ProfileCreate):
+async def create_or_replace_profile(body: ProfileCreate, request: Request):
     data = body.model_dump(exclude_none=True)
 
     for exp in data.get("experiences", []):
@@ -75,11 +74,11 @@ async def create_or_replace_profile(body: ProfileCreate):
 
     data = _sanitize_dict(data)
     data["updated_at"] = datetime.utcnow().isoformat()
-    return await upsert_profile(LOCAL_USER_ID, data)
+    return await upsert_profile(request.state.user_id, data)
 
 
 @router.patch("/{section}")
-async def patch_section(section: str, body: dict):
+async def patch_section(section: str, body: dict, request: Request):
     if section not in _ALLOWED_SECTIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -119,4 +118,4 @@ async def patch_section(section: str, body: dict):
         section_data = items
 
     section_data = _sanitize_dict(section_data)
-    return await patch_profile_section(LOCAL_USER_ID, section, section_data)
+    return await patch_profile_section(request.state.user_id, section, section_data)

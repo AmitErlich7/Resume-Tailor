@@ -5,17 +5,17 @@ Security note: GitHub tokens are never persisted. They live only for the
 duration of the request and are never logged.
 """
 
+import json
 import logging
 import os
 import re
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from fastapi import HTTPException, status
 from github import Github, GithubException, RateLimitExceededException, UnknownObjectException
 
 logger = logging.getLogger(__name__)
 
-# Manifest files checked in priority order
 _MANIFEST_FILES = [
     "package.json",
     "requirements.txt",
@@ -31,21 +31,9 @@ _MAX_MANIFEST_CHARS = 3000
 
 
 def parse_repo_url(repo_url: str) -> Tuple[str, str]:
-    """
-    Extract (owner, repo) from a GitHub URL.
-
-    Supports:
-      https://github.com/owner/repo
-      https://github.com/owner/repo.git
-      github.com/owner/repo
-      owner/repo
-    """
     url = repo_url.strip().rstrip("/")
-    # Strip scheme
     url = re.sub(r"^https?://", "", url)
-    # Strip leading github.com/
     url = re.sub(r"^github\.com/", "", url)
-    # Strip .git suffix
     url = re.sub(r"\.git$", "", url)
     parts = url.split("/")
     if len(parts) < 2:
@@ -57,24 +45,74 @@ def parse_repo_url(repo_url: str) -> Tuple[str, str]:
 
 
 def _get_github_client(token: Optional[str] = None) -> Github:
-    """Return an authenticated or unauthenticated GitHub client."""
     if token:
         return Github(token)
-    # Fall back to env-level token for higher rate limits
     env_token = os.getenv("GITHUB_CLIENT_SECRET")
     if env_token:
         return Github(env_token)
     return Github()
 
 
+def _extract_tech_stack(manifest_name: Optional[str], manifest_content: str) -> List[str]:
+    """Parse manifest file content into a flat list of technology/package names."""
+    if not manifest_name or not manifest_content:
+        return []
+
+    techs = []
+
+    if manifest_name == "package.json":
+        try:
+            pkg = json.loads(manifest_content)
+            deps = list(pkg.get("dependencies", {}).keys())
+            dev_deps = list(pkg.get("devDependencies", {}).keys())
+            techs = deps + dev_deps
+        except json.JSONDecodeError:
+            pass
+
+    elif manifest_name == "requirements.txt":
+        for line in manifest_content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("-"):
+                continue
+            name = re.split(r"[=<>!~\[]", line)[0].strip()
+            if name:
+                techs.append(name)
+
+    elif manifest_name == "Cargo.toml":
+        in_deps = False
+        for line in manifest_content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("[") and "dependencies" in stripped.lower():
+                in_deps = True
+                continue
+            if stripped.startswith("[") and "dependencies" not in stripped.lower():
+                in_deps = False
+                continue
+            if in_deps and "=" in stripped:
+                name = stripped.split("=")[0].strip()
+                if name:
+                    techs.append(name)
+
+    elif manifest_name == "go.mod":
+        for line in manifest_content.splitlines():
+            line = line.strip()
+            if line.startswith("require") or line.startswith(")") or line == "(":
+                continue
+            parts = line.split()
+            if parts and "/" in parts[0]:
+                techs.append(parts[0].split("/")[-1])
+
+    elif manifest_name == "pom.xml":
+        for match in re.finditer(r"<artifactId>([^<]+)</artifactId>", manifest_content):
+            techs.append(match.group(1))
+
+    return techs
+
+
 async def fetch_repo_data(repo_url: str, github_token: Optional[str] = None) -> dict:
     """
-    Fetch repository data needed for project card extraction.
-
-    Returns a dict with: description, readme, manifest_name, manifest_content,
-    top_level_dirs.
-
-    Raises HTTPException 429 on rate-limit, 404 on missing repo, 400 on bad URL.
+    Fetch repository data: tech stack (from manifest) and raw README text.
+    No AI analysis — returns data directly for user review.
     """
     owner, repo_name = parse_repo_url(repo_url)
     gh = _get_github_client(github_token)
@@ -100,11 +138,10 @@ async def fetch_repo_data(repo_url: str, github_token: Optional[str] = None) -> 
 
     data: dict = {
         "repo_url": repo_url,
+        "name": repo.name,
         "description": repo.description or "",
-        "readme": "",
-        "manifest_name": None,
-        "manifest_content": "",
-        "top_level_dirs": [],
+        "readme_text": "",
+        "tech_stack": [],
     }
 
     # README
@@ -112,35 +149,25 @@ async def fetch_repo_data(repo_url: str, github_token: Optional[str] = None) -> 
         try:
             readme_file = repo.get_contents(readme_name)
             content = readme_file.decoded_content.decode("utf-8", errors="replace")
-            data["readme"] = content[:_MAX_README_CHARS]
+            data["readme_text"] = content[:_MAX_README_CHARS]
             break
         except (UnknownObjectException, GithubException):
             continue
 
-    # Manifest / dependency file
+    # Manifest / dependency file → tech stack
     for manifest in _MANIFEST_FILES:
         try:
             mf = repo.get_contents(manifest)
             content = mf.decoded_content.decode("utf-8", errors="replace")
-            data["manifest_name"] = manifest
-            data["manifest_content"] = content[:_MAX_MANIFEST_CHARS]
+            data["tech_stack"] = _extract_tech_stack(manifest, content[:_MAX_MANIFEST_CHARS])
             break
         except (UnknownObjectException, GithubException):
             continue
-
-    # Top-level directory listing (folder names only)
-    try:
-        contents = repo.get_contents("")
-        dirs = [c.name for c in contents if c.type == "dir"]
-        data["top_level_dirs"] = dirs
-    except GithubException:
-        pass
 
     return data
 
 
 def parse_profile_url(github_input: str) -> str:
-    """Extract username from a GitHub profile URL or bare username."""
     url = github_input.strip().rstrip("/")
     url = re.sub(r"^https?://", "", url)
     url = re.sub(r"^github\.com/", "", url)
@@ -194,19 +221,3 @@ async def fetch_user_repos(github_input: str, github_token: Optional[str] = None
         )
 
     return repos
-
-
-def build_repo_context(repo_data: dict) -> str:
-    """Format fetched repo data into a prompt-ready context string."""
-    parts = []
-    if repo_data.get("description"):
-        parts.append(f"Repository description: {repo_data['description']}")
-    if repo_data.get("readme"):
-        parts.append(f"README (first {_MAX_README_CHARS} chars):\n{repo_data['readme']}")
-    if repo_data.get("manifest_name") and repo_data.get("manifest_content"):
-        parts.append(
-            f"{repo_data['manifest_name']} contents:\n{repo_data['manifest_content']}"
-        )
-    if repo_data.get("top_level_dirs"):
-        parts.append(f"Top-level directories: {', '.join(repo_data['top_level_dirs'])}")
-    return "\n\n---\n\n".join(parts)

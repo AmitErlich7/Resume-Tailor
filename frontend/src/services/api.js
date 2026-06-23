@@ -1,13 +1,36 @@
 /**
- * API service layer — local mode, no authentication.
+ * API service layer — authenticated via Supabase JWT.
  */
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
+let _accessToken = null
+
+export function setAccessToken(token) {
+  _accessToken = token
+  if (token) {
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]))
+      console.log('[api] token set:', token.slice(0, 20) + '...', 'role:', payload.role, 'sub:', payload.sub)
+    } catch { console.log('[api] token set:', token.slice(0, 20) + '...') }
+  } else {
+    console.log('[api] token set: null')
+  }
+}
+
+function _headers(contentType = 'application/json') {
+  const h = {}
+  if (contentType) h['Content-Type'] = contentType
+  if (_accessToken) h['Authorization'] = `Bearer ${_accessToken}`
+  return h
+}
+
 async function request(method, path, body) {
+  const hdrs = _headers()
+  console.log('[api] request', method, path, 'hasAuth:', !!hdrs['Authorization'])
   const options = {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: hdrs,
   }
   if (body !== undefined) {
     options.body = JSON.stringify(body)
@@ -78,6 +101,38 @@ export async function confirmGitHubProject(project) {
 }
 
 // -------------------------------------------------------------------------
+// CV Upload
+// -------------------------------------------------------------------------
+
+export async function uploadCV(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const headers = {}
+  if (_accessToken) headers['Authorization'] = `Bearer ${_accessToken}`
+
+  const response = await fetch(`${BASE_URL}/cv/upload`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`
+    try {
+      const json = await response.json()
+      detail = json.detail || JSON.stringify(json)
+      if (typeof detail === 'object') detail = JSON.stringify(detail)
+    } catch {}
+    const err = new Error(detail)
+    err.status = response.status
+    throw err
+  }
+
+  return response.json()
+}
+
+// -------------------------------------------------------------------------
 // Tailor
 // -------------------------------------------------------------------------
 
@@ -114,7 +169,7 @@ export async function atsScoreResume(id) {
 export async function exportDocx(id) {
   const response = await fetch(`${BASE_URL}/export/${id}/docx`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: _headers(),
   })
   if (!response.ok) {
     let detail = `HTTP ${response.status}`
@@ -136,7 +191,7 @@ export async function exportDocx(id) {
 export async function exportPdf(id) {
   const response = await fetch(`${BASE_URL}/export/${id}/pdf`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: _headers(),
   })
   if (!response.ok) {
     let detail = `HTTP ${response.status}`

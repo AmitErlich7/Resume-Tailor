@@ -6,13 +6,13 @@ GET    /tailor/versions           — list all tailored resumes
 GET    /tailor/{id}               — get a specific tailored resume
 POST   /tailor/{id}/ats-score     — score resume ATS compatibility (1-100)
 PATCH  /tailor/{id}/approve       — approve a resume
-DELETE /tailor/{id}               — soft delete (status → archived)
+DELETE /tailor/{id}               — soft delete (status -> archived)
 """
 
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 
 from middleware.input_guard import guard_jd, guard_short
 from middleware.rate_limiter import tailor_rate_limit
@@ -25,7 +25,6 @@ from services.ai_service import (
     tailor_resume,
 )
 from services.db_service import (
-    LOCAL_USER_ID,
     create_tailored_resume,
     get_profile,
     get_tailored_resume,
@@ -39,8 +38,9 @@ router = APIRouter()
 
 
 @router.post("")
-async def run_tailor_pipeline(body: TailorRequest):
-    user_id = tailor_rate_limit()
+async def run_tailor_pipeline(body: TailorRequest, request: Request):
+    tailor_rate_limit()
+    user_id = request.state.user_id
 
     profile = await get_profile(user_id)
     if not profile:
@@ -106,31 +106,26 @@ async def run_tailor_pipeline(body: TailorRequest):
 
 
 @router.get("/versions")
-async def get_versions():
-    return await list_tailored_resumes(LOCAL_USER_ID)
+async def get_versions(request: Request):
+    return await list_tailored_resumes(request.state.user_id)
 
 
 @router.get("/{resume_id}")
-async def get_resume(resume_id: str):
-    resume = await get_tailored_resume(resume_id, LOCAL_USER_ID)
+async def get_resume(resume_id: str, request: Request):
+    resume = await get_tailored_resume(resume_id, request.state.user_id)
     if not resume:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resume not found")
     return resume
 
 
 @router.post("/{resume_id}/ats-score")
-async def score_ats(resume_id: str):
-    """
-    Run the ATS scoring agent on a tailored resume.
-    Scores the CV 1-100 and returns a detailed breakdown.
-    Result is cached on the resume record and returned on subsequent GET /{id} calls.
-    """
-    resume = await get_tailored_resume(resume_id, LOCAL_USER_ID)
+async def score_ats(resume_id: str, request: Request):
+    user_id = request.state.user_id
+    resume = await get_tailored_resume(resume_id, user_id)
     if not resume:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resume not found")
 
-    # Enrich with contact/education from profile so the scorer sees the full CV
-    profile = await get_profile(LOCAL_USER_ID)
+    profile = await get_profile(user_id)
     if profile:
         resume["contact"] = profile.get("contact", {})
         resume["education"] = profile.get("education", [])
@@ -138,13 +133,14 @@ async def score_ats(resume_id: str):
     logger.info("Running ATS score for resume %s", resume_id)
     ats_data = await ats_score_resume(resume)
 
-    updated = await save_ats_score(resume_id, LOCAL_USER_ID, ats_data)
+    updated = await save_ats_score(resume_id, user_id, ats_data)
     return {"resume": updated, "ats_score": ats_data}
 
 
 @router.patch("/{resume_id}/approve")
-async def approve_resume(resume_id: str, body: ApproveRequest):
-    resume = await get_tailored_resume(resume_id, LOCAL_USER_ID)
+async def approve_resume(resume_id: str, body: ApproveRequest, request: Request):
+    user_id = request.state.user_id
+    resume = await get_tailored_resume(resume_id, user_id)
     if not resume:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resume not found")
 
@@ -165,15 +161,16 @@ async def approve_resume(resume_id: str, body: ApproveRequest):
 
     return await update_tailored_resume_status(
         resume_id,
-        LOCAL_USER_ID,
+        user_id,
         "approved",
         extra={"approved_at": datetime.utcnow()},
     )
 
 
 @router.delete("/{resume_id}")
-async def delete_resume(resume_id: str):
-    resume = await get_tailored_resume(resume_id, LOCAL_USER_ID)
+async def delete_resume(resume_id: str, request: Request):
+    user_id = request.state.user_id
+    resume = await get_tailored_resume(resume_id, user_id)
     if not resume:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resume not found")
-    return await update_tailored_resume_status(resume_id, LOCAL_USER_ID, "archived")
+    return await update_tailored_resume_status(resume_id, user_id, "archived")

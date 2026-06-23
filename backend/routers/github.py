@@ -1,22 +1,22 @@
-﻿"""
+"""
 GitHub router
 
-POST /github/import   â€” analyze a repo, return project card (NOT saved yet)
-POST /github/confirm  â€” save the confirmed project card to the user's profile
+POST /github/fetch-profile — list user's public repos
+POST /github/import        — fetch tech stack + README for a repo (no AI)
+POST /github/confirm       — save the confirmed project card to the user's profile
 """
 
 import logging
 import uuid
 
 import bleach
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
 from middleware.rate_limiter import github_rate_limit
 from models.project import Project
-from services.ai_service import analyze_github_repo
-from services.db_service import LOCAL_USER_ID, add_project_to_profile
-from services.github_service import build_repo_context, fetch_repo_data, fetch_user_repos
+from services.db_service import add_project_to_profile
+from services.github_service import fetch_repo_data, fetch_user_repos
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -50,35 +50,20 @@ async def fetch_github_profile(body: FetchProfileRequest):
 @router.post("/import")
 async def import_github_repo(body: ImportRequest):
     github_rate_limit()
-
     repo_url = bleach.clean(body.repo_url, tags=[], strip=True).strip()
-
     repo_data = await fetch_repo_data(repo_url)
-    context = build_repo_context(repo_data)
-
-    if not context.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Repository appears empty â€” no README, dependency file, or description found.",
-        )
-
-    raw_result, validation_error = await analyze_github_repo(context, repo_url)
-
-    if validation_error:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "message": "AI output failed validation",
-                "raw_output": raw_result,
-                "validation_error": validation_error,
-            },
-        )
-
-    return {"project_card": raw_result, "repo_url": repo_url}
+    return {
+        "name": repo_data["name"],
+        "description": repo_data["description"],
+        "tech_stack": repo_data["tech_stack"],
+        "readme_text": repo_data["readme_text"],
+        "repo_url": repo_data["repo_url"],
+    }
 
 
 @router.post("/confirm", status_code=status.HTTP_201_CREATED)
-async def confirm_github_project(body: ConfirmRequest):
+async def confirm_github_project(body: ConfirmRequest, request: Request):
+    user_id = request.state.user_id
     card = body.project
 
     card.setdefault("id", str(uuid.uuid4()))
@@ -104,6 +89,5 @@ async def confirm_github_project(body: ConfirmRequest):
         )
 
     project_dict = project.model_dump()
-    profile = await add_project_to_profile(LOCAL_USER_ID, project_dict)
+    profile = await add_project_to_profile(user_id, project_dict)
     return {"profile": profile, "project": project_dict}
- 
